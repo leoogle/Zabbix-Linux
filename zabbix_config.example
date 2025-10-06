@@ -1,0 +1,73 @@
+# Archivo de configuración de ejemplo para el instalador de Zabbix
+# Copie este archivo a ~/.zabbix_config o /etc/zabbix/installer.conf
+# y modifique los valores según su entorno
+
+#################################################################################
+#                           CONFIGURACIÓN BÁSICA                               #
+#################################################################################
+
+# URL del servidor Zabbix (REQUERIDO)
+# Ejemplos:
+#   http://zabbix.ejemplo.com
+#   https://monitoring.empresa.com
+#   http://192.168.1.100
+export ZABBIX_SERVER_URL="http://zabbix.local"
+
+# Credenciales para la API de Zabbix (REQUERIDOS)
+export ZABBIX_API_USER="admin"
+export ZABBIX_API_PASSWORD="zabbix"
+
+#################################################################################
+#                          CONFIGURACIÓN AVANZADA                              #
+#################################################################################
+
+# Grupo de hosts en Zabbix donde se registrará el servidor
+# Si no existe, se creará automáticamente
+export ZABBIX_HOST_GROUP="Linux servers"
+
+# Puerto del servidor Zabbix (para comunicación activa del agente)
+export ZABBIX_SERVER_PORT="10051"
+
+# Puerto del agente Zabbix (donde escucha el agente)
+export ZABBIX_AGENT_PORT="10050"
+
+#################################################################################
+#                         OPCIONES DE COMPORTAMIENTO                           #
+#################################################################################
+
+# Forzar reinstalación aunque Zabbix ya esté instalado
+# Valores: true, false
+export FORCE_REINSTALL="false"
+
+# Actualizar configuración de host si ya existe en Zabbix
+# Valores: true, false
+export UPDATE_EXISTING_HOST="false"
+
+# Habilitar modo debug para logging detallado
+# Valores: true, false
+export DEBUG="false"
+
+#################################################################################
+#                        EJEMPLOS POR ENTORNO                                  #
+#################################################################################
+
+# DESARROLLO
+# export ZABBIX_SERVER_URL="http://zabbix-dev.local"
+# export ZABBIX_API_USER="dev-user"
+# export ZABBIX_API_PASSWORD="dev-password"
+# export ZABBIX_HOST_GROUP="Development Servers"
+# export DEBUG="true"
+
+# TESTING
+# export ZABBIX_SERVER_URL="http://zabbix-test.empresa.com"
+# export ZABBIX_API_USER="test-api"
+# export ZABBIX_API_PASSWORD="test-password"
+# export ZABBIX_HOST_GROUP="Testing Environment"
+# export UPDATE_EXISTING_HOST="true"
+
+# PRODUCCIÓN
+# export ZABBIX_SERVER_URL="https://monitoring.empresa.com"
+# export ZABBIX_API_USER="production-api"
+# export ZABBIX_API_PASSWORD="password-seguro-complejo"
+# export ZABBIX_HOST_GROUP="Production Servers"
+# export DEBUG="false"
