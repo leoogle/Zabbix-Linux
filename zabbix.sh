@@ -9,10 +9,31 @@
 #                                                                               #
 # Uso: ./zabbix.sh                                                             #
 # Variables de entorno requeridas:                                             #
-#   ZABBIX_SERVER_URL    - URL del servidor Zabbix (ej: http://zabbix.local)  #
-#   ZABBIX_API_USER      - Usuario para API de Zabbix                         #
-#   ZABBIX_API_PASSWORD  - Contraseña para API de Zabbix                      #
-#   ZABBIX_HOST_GROUP     - Grupo de hosts (opcional, default: "Linux servers") #
+#   ZABBIX_SERVER_URL      - URL del servidor Zabbix (ej: http://zabbix.local) #
+#                                                                               #
+# Autenticación (una de las siguientes opciones):                             #
+#   ZABBIX_API_TOKEN       - API token para autenticación (recomendado)       #
+#   O:                                                                          #
+#   ZABBIX_API_USER        - Usuario para API de Zabbix                       #
+#   ZABBIX_API_PASSWORD    - Contraseña para API de Zabbix                    #
+#                                                                               #
+# Variables opcionales:                                                         #
+#   ZABBIX_HOST_GROUP      - Grupo de hosts (default: "Linux servers")        #
+#   ZABBIX_EXPECTED_VERSION - Versión esperada del agente (para validación)   #
+#   ZABBIX_TEMPLATE_NAME   - Nombre del template (default: "Linux by Zabbix agent") #
+#   ZABBIX_KNOWN_GROUP_ID  - ID conocido del grupo (optimización)             #
+#   ZABBIX_KNOWN_TEMPLATE_ID - ID conocido del template (optimización)        #
+#   ZABBIX_SERVER_PORT     - Puerto del servidor (default: 10051)             #
+#   ZABBIX_AGENT_PORT      - Puerto del agente (default: 10050)               #
+#                                                                               #
+# Características mejoradas:                                                   #
+# - Soporte para API tokens y autenticación tradicional                       #
+# - URLs de fallback automático para diferentes configuraciones de Zabbix     #
+# - Detección inteligente de IP excluyendo interfaces virtuales               #
+# - Verificación y comparación de versiones del agente                        #
+# - Gestión robusta de servicios con múltiples nombres                        #
+# - Configuración conocida para evitar búsquedas innecesarias                 #
+# - Manejo de errores mejorado con reintentos automáticos                     #
 #################################################################################
 
 # Configuración global
@@ -22,14 +43,22 @@ set -euo pipefail  # Exit on error, undefined vars, pipe failures
 ZABBIX_SERVER_URL="${ZABBIX_SERVER_URL:-}"
 ZABBIX_API_USER="${ZABBIX_API_USER:-}"
 ZABBIX_API_PASSWORD="${ZABBIX_API_PASSWORD:-}"
+ZABBIX_API_TOKEN="${ZABBIX_API_TOKEN:-}"
 ZABBIX_HOST_GROUP="${ZABBIX_HOST_GROUP:-Linux servers}"
 ZABBIX_SERVER_PORT="${ZABBIX_SERVER_PORT:-10051}"
 ZABBIX_AGENT_PORT="${ZABBIX_AGENT_PORT:-10050}"
+ZABBIX_EXPECTED_VERSION="${ZABBIX_EXPECTED_VERSION:-}"
+
+# Configuración conocida para evitar búsquedas innecesarias (opcional)
+ZABBIX_KNOWN_GROUP_ID="${ZABBIX_KNOWN_GROUP_ID:-}"
+ZABBIX_KNOWN_TEMPLATE_ID="${ZABBIX_KNOWN_TEMPLATE_ID:-}"
+ZABBIX_TEMPLATE_NAME="${ZABBIX_TEMPLATE_NAME:-Linux by Zabbix agent}"
 
 # Variables para parámetros de línea de comandos
 PARAM_SERVER_URL=""
 PARAM_API_USER=""
 PARAM_API_PASSWORD=""
+PARAM_API_TOKEN=""
 PARAM_HOST_GROUP=""
 PARAM_SERVER_PORT=""
 PARAM_AGENT_PORT=""
@@ -125,6 +154,9 @@ validate_requirements() {
     if [[ -n "$PARAM_API_PASSWORD" ]]; then
         ZABBIX_API_PASSWORD="$PARAM_API_PASSWORD"
     fi
+    if [[ -n "$PARAM_API_TOKEN" ]]; then
+        ZABBIX_API_TOKEN="$PARAM_API_TOKEN"
+    fi
     if [[ -n "$PARAM_HOST_GROUP" ]]; then
         ZABBIX_HOST_GROUP="$PARAM_HOST_GROUP"
     fi
@@ -142,15 +174,15 @@ validate_requirements() {
         exit 1
     fi
     
-    if [[ -z "$ZABBIX_API_USER" ]]; then
-        log_error "Usuario de API de Zabbix no definido"
-        log_info "Use: --api-user <USER> o export ZABBIX_API_USER='admin'"
-        exit 1
-    fi
-    
-    if [[ -z "$ZABBIX_API_PASSWORD" ]]; then
-        log_error "Contraseña de API de Zabbix no definida"
-        log_info "Use: --api-password <PASS> o export ZABBIX_API_PASSWORD='password'"
+    # Validar que se proporcione autenticación (API token O usuario/contraseña)
+    if [[ -n "$ZABBIX_API_TOKEN" ]]; then
+        log_info "Usando autenticación con API token"
+    elif [[ -n "$ZABBIX_API_USER" && -n "$ZABBIX_API_PASSWORD" ]]; then
+        log_info "Usando autenticación con usuario/contraseña"
+    else
+        log_error "Se requiere autenticación: API token o usuario/contraseña"
+        log_info "Use: --api-token <TOKEN> o export ZABBIX_API_TOKEN='your_token'"
+        log_info "O: --api-user <USER> --api-password <PASS>"
         exit 1
     fi
     
@@ -183,6 +215,154 @@ validate_network() {
     log_success "Conectividad de red validada"
 }
 
+detect_primary_ip() {
+    log_debug "Detectando IP principal del sistema..."
+    
+    # Lista de interfaces a excluir (virtuales, VPN, etc.)
+    local excluded_interfaces=(
+        "lo" "loopback" "docker" "br-" "veth" "virbr" "vmnet" "vbox" 
+        "tun" "tap" "ppp" "wg" "vpn" "vlan" "bond" "team"
+    )
+    
+    # Patrones de IP a excluir
+    local excluded_ip_patterns=(
+        "127\."          # Loopback
+        "169\.254\."     # APIPA/Link-local
+        "172\.1[6-9]\."  # Docker default range start
+        "172\.2[0-9]\."  # Docker default range middle
+        "172\.3[0-1]\."  # Docker default range end
+        "192\.168\.27\." # VirtualBox host-only
+        "192\.168\.56\." # VirtualBox host-only default
+        "10\.0\.75\."    # Hyper-V default
+    )
+    
+    local best_ip=""
+    local best_interface=""
+    local best_score=0
+    
+    # Método 1: Usar ip route para obtener la IP de la ruta por defecto
+    local default_route_ip=$(ip route get 8.8.8.8 2>/dev/null | awk '/src/ {print $7}' | head -1)
+    if [[ -n "$default_route_ip" ]]; then
+        local default_route_interface=$(ip route get 8.8.8.8 2>/dev/null | awk '/dev/ {print $5}' | head -1)
+        log_debug "IP de ruta por defecto: $default_route_ip (interfaz: $default_route_interface)"
+        
+        # Verificar si esta IP debe ser excluida
+        local exclude_ip=false
+        for pattern in "${excluded_ip_patterns[@]}"; do
+            if [[ "$default_route_ip" =~ $pattern ]]; then
+                exclude_ip=true
+                log_debug "IP $default_route_ip excluida por patrón: $pattern"
+                break
+            fi
+        done
+        
+        # Verificar si la interfaz debe ser excluida
+        local exclude_interface=false
+        for excluded in "${excluded_interfaces[@]}"; do
+            if [[ "$default_route_interface" == *"$excluded"* ]]; then
+                exclude_interface=true
+                log_debug "Interfaz $default_route_interface excluida por contener: $excluded"
+                break
+            fi
+        done
+        
+        if [[ "$exclude_ip" == false && "$exclude_interface" == false ]]; then
+            best_ip="$default_route_ip"
+            best_interface="$default_route_interface"
+            best_score=100
+            log_debug "Usando IP de ruta por defecto: $best_ip"
+        fi
+    fi
+    
+    # Método 2: Si no tenemos una buena IP, buscar en todas las interfaces
+    if [[ -z "$best_ip" ]]; then
+        log_debug "Buscando IPs en todas las interfaces..."
+        
+        # Obtener todas las IPs del sistema
+        local all_ips
+        if command -v ip &>/dev/null; then
+            all_ips=$(ip addr show 2>/dev/null | grep -E 'inet [0-9]' | grep -v '127.0.0.1' | awk '{print $2, $NF}')
+        elif command -v ifconfig &>/dev/null; then
+            all_ips=$(ifconfig 2>/dev/null | grep -E 'inet [0-9]' | grep -v '127.0.0.1' | awk '{print $2, $1}' | sed 's/addr://')
+        fi
+        
+        while IFS=' ' read -r ip_cidr interface; do
+            [[ -z "$ip_cidr" ]] && continue
+            
+            local ip_addr="${ip_cidr%/*}"  # Remover CIDR
+            [[ -z "$ip_addr" ]] && continue
+            
+            log_debug "Evaluando IP: $ip_addr (interfaz: $interface)"
+            
+            # Verificar patrones de IP excluidos
+            local exclude_ip=false
+            for pattern in "${excluded_ip_patterns[@]}"; do
+                if [[ "$ip_addr" =~ $pattern ]]; then
+                    exclude_ip=true
+                    log_debug "IP $ip_addr excluida por patrón: $pattern"
+                    break
+                fi
+            done
+            
+            [[ "$exclude_ip" == true ]] && continue
+            
+            # Verificar interfaces excluidas
+            local exclude_interface=false
+            for excluded in "${excluded_interfaces[@]}"; do
+                if [[ "$interface" == *"$excluded"* ]]; then
+                    exclude_interface=true
+                    log_debug "Interfaz $interface excluida por contener: $excluded"
+                    break
+                fi
+            done
+            
+            [[ "$exclude_interface" == true ]] && continue
+            
+            # Calcular puntuación para esta IP
+            local score=0
+            
+            # IPs privadas comunes tienen mayor puntuación
+            if [[ "$ip_addr" =~ ^192\.168\. ]]; then
+                score=$((score + 50))
+            elif [[ "$ip_addr" =~ ^10\. ]]; then
+                score=$((score + 40))
+            elif [[ "$ip_addr" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]]; then
+                score=$((score + 30))
+            else
+                # IP pública
+                score=$((score + 60))
+            fi
+            
+            # Interfaces comunes tienen mayor puntuación
+            if [[ "$interface" =~ ^(eth|ens|enp|eno|em) ]]; then
+                score=$((score + 20))
+            elif [[ "$interface" =~ ^wl ]]; then
+                score=$((score + 15))
+            fi
+            
+            log_debug "IP $ip_addr (interfaz: $interface) puntuación: $score"
+            
+            if [[ $score -gt $best_score ]]; then
+                best_ip="$ip_addr"
+                best_interface="$interface"
+                best_score=$score
+                log_debug "Nueva mejor IP: $best_ip (puntuación: $best_score)"
+            fi
+            
+        done <<< "$all_ips"
+    fi
+    
+    # Método 3: Fallback a métodos tradicionales
+    if [[ -z "$best_ip" ]]; then
+        log_warning "No se pudo detectar IP inteligentemente, usando métodos tradicionales..."
+        best_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || \
+                  ifconfig 2>/dev/null | grep -E 'inet [0-9]' | grep -v '127.0.0.1' | awk '{print $2}' | head -1)
+    fi
+    
+    HOST_IP="$best_ip"
+    log_debug "IP final seleccionada: $HOST_IP (interfaz: $best_interface)"
+}
+
 get_system_info() {
     log_info "Obteniendo información del sistema..."
     
@@ -190,10 +370,8 @@ get_system_info() {
     HOSTNAME=$(hostname -f 2>/dev/null || hostname)
     log_info "Hostname: $HOSTNAME"
     
-    # Obtener IP principal
-    HOST_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $7; exit}' || \
-              hostname -I 2>/dev/null | awk '{print $1}' || \
-              ifconfig 2>/dev/null | grep -E 'inet [0-9]' | grep -v '127.0.0.1' | awk '{print $2}' | head -1)
+    # Obtener IP principal de forma inteligente (excluyendo interfaces virtuales)
+    detect_primary_ip
     
     if [[ -z "$HOST_IP" ]]; then
         log_error "No se pudo determinar la IP del sistema"
@@ -489,6 +667,108 @@ install_zabbix_repository() {
     log_success "Repositorio de Zabbix instalado correctamente"
 }
 
+get_installed_zabbix_version() {
+    local installed_version=""
+    
+    case "$DISTRO" in
+        "ubuntu"|"debian")
+            if dpkg -l | grep -q "zabbix-agent"; then
+                installed_version=$(dpkg -l | grep "zabbix-agent" | grep -v "zabbix-agent2" | awk '{print $3}' | head -1)
+            elif dpkg -l | grep -q "zabbix-agent2"; then
+                installed_version=$(dpkg -l | grep "zabbix-agent2" | awk '{print $3}' | head -1)
+            fi
+            ;;
+        "centos"|"rhel"|"rocky"|"almalinux")
+            if rpm -qa | grep -q "zabbix-agent-"; then
+                installed_version=$(rpm -qa | grep "zabbix-agent-" | grep -v "zabbix-agent2-" | head -1 | sed 's/zabbix-agent-//' | cut -d'-' -f1)
+            elif rpm -qa | grep -q "zabbix-agent2-"; then
+                installed_version=$(rpm -qa | grep "zabbix-agent2-" | head -1 | sed 's/zabbix-agent2-//' | cut -d'-' -f1)
+            fi
+            ;;
+    esac
+    
+    # También intentar obtener versión del binario si está instalado
+    if [[ -z "$installed_version" ]]; then
+        if command -v zabbix_agentd &>/dev/null; then
+            installed_version=$(zabbix_agentd -V 2>/dev/null | grep "zabbix_agentd" | awk '{print $3}' | head -1)
+        elif command -v zabbix_agent2 &>/dev/null; then
+            installed_version=$(zabbix_agent2 -V 2>/dev/null | grep "zabbix_agent2" | awk '{print $3}' | head -1)
+        fi
+    fi
+    
+    echo "$installed_version"
+}
+
+compare_versions() {
+    local version1="$1"
+    local version2="$2"
+    
+    # Normalizar versiones (remover sufijos como -1ubuntu1, etc.)
+    version1=$(echo "$version1" | sed 's/[:-].*//')
+    version2=$(echo "$version2" | sed 's/[:-].*//')
+    
+    if [[ "$version1" == "$version2" ]]; then
+        return 0  # Iguales
+    fi
+    
+    # Comparar usando sort -V si está disponible
+    if command -v sort &>/dev/null; then
+        local latest=$(printf '%s\n%s\n' "$version1" "$version2" | sort -V | tail -1)
+        if [[ "$latest" == "$version2" ]]; then
+            return 1  # version2 es mayor
+        else
+            return 2  # version1 es mayor
+        fi
+    fi
+    
+    # Fallback: comparación simple
+    if [[ "$version1" < "$version2" ]]; then
+        return 1
+    else
+        return 2
+    fi
+}
+
+check_version_requirements() {
+    log_info "Verificando versión del agente Zabbix..."
+    
+    local installed_version=$(get_installed_zabbix_version)
+    
+    if [[ -z "$installed_version" ]]; then
+        log_info "Agente Zabbix no está instalado"
+        return 1  # Necesita instalación
+    fi
+    
+    log_info "Versión instalada: $installed_version"
+    
+    if [[ -n "$ZABBIX_EXPECTED_VERSION" ]]; then
+        log_info "Versión esperada: $ZABBIX_EXPECTED_VERSION"
+        
+        compare_versions "$installed_version" "$ZABBIX_EXPECTED_VERSION"
+        local comparison=$?
+        
+        case $comparison in
+            0)
+                log_success "La versión instalada coincide con la esperada"
+                return 0  # No necesita actualización
+                ;;
+            1)
+                log_warning "La versión instalada ($installed_version) es anterior a la esperada ($ZABBIX_EXPECTED_VERSION)"
+                log_info "Se procederá a actualizar..."
+                return 1  # Necesita actualización
+                ;;
+            2)
+                log_info "La versión instalada ($installed_version) es posterior a la esperada ($ZABBIX_EXPECTED_VERSION)"
+                log_info "Se mantendrá la versión actual"
+                return 0  # No necesita actualización
+                ;;
+        esac
+    else
+        log_info "No se especificó versión esperada, se mantendrá la versión actual: $installed_version"
+        return 0  # No necesita actualización
+    fi
+}
+
 install_zabbix_agent() {
     log_info "Instalando agente Zabbix..."
     
@@ -547,33 +827,61 @@ install_zabbix_agent() {
 check_existing_installation() {
     log_info "Verificando instalación existente de Zabbix..."
     
-    local zabbix_installed=false
-    local zabbix_running=false
-    
-    # Verificar si Zabbix está instalado
-    case "$DISTRO" in
-        "ubuntu"|"debian")
-            if dpkg -l | grep -q "zabbix-agent"; then
-                zabbix_installed=true
-                log_info "Zabbix agent ya está instalado"
-            fi
-            ;;
-        "centos"|"rhel"|"rocky"|"almalinux")
-            if rpm -qa | grep -q "zabbix-agent"; then
-                zabbix_installed=true
-                log_info "Zabbix agent ya está instalado"
-            fi
-            ;;
-    esac
-    
-    # Verificar si el servicio está corriendo
-    if systemctl is-active --quiet zabbix-agent 2>/dev/null; then
-        zabbix_running=true
-        log_info "Servicio zabbix-agent está activo"
+    # Verificar versión y determinar si necesita instalación/actualización
+    if ! check_version_requirements; then
+        log_info "Se requiere instalación o actualización del agente"
+        return 1  # Necesita instalación/actualización
     fi
     
-    # Si está instalado y corriendo, preguntar qué hacer
-    if [[ "$zabbix_installed" == true ]]; then
+    # Verificar si el servicio está corriendo
+    local service_running=false
+    local service_names=("zabbix-agent" "zabbix-agent2")
+    local active_service=""
+    
+    for service_name in "${service_names[@]}"; do
+        if systemctl is-active --quiet "$service_name" 2>/dev/null; then
+            service_running=true
+            active_service="$service_name"
+            log_info "Servicio $service_name está activo"
+            break
+        fi
+    done
+    
+    if [[ "$service_running" == false ]]; then
+        log_warning "Agente Zabbix está instalado pero el servicio no está corriendo"
+        
+        # Intentar encontrar el servicio correcto
+        for service_name in "${service_names[@]}"; do
+            if systemctl is-enabled --quiet "$service_name" 2>/dev/null; then
+                log_info "Encontrado servicio habilitado: $service_name"
+                active_service="$service_name"
+                break
+            fi
+        done
+        
+        if [[ -n "$active_service" ]]; then
+            log_info "Intentando iniciar servicio $active_service..."
+            if systemctl start "$active_service" 2>/dev/null; then
+                log_success "Servicio $active_service iniciado correctamente"
+                service_running=true
+            else
+                log_warning "No se pudo iniciar el servicio $active_service"
+            fi
+        fi
+    fi
+    
+    # Determinar configuración de archivos
+    if [[ -f "/etc/zabbix/zabbix_agentd.conf" ]]; then
+        ZABBIX_CONFIG_FILE="/etc/zabbix/zabbix_agentd.conf"
+    elif [[ -f "/etc/zabbix/zabbix_agent2.conf" ]]; then
+        ZABBIX_CONFIG_FILE="/etc/zabbix/zabbix_agent2.conf"
+    else
+        log_warning "No se encontró archivo de configuración de Zabbix"
+        return 1  # Necesita instalación
+    fi
+    
+    log_success "Agente Zabbix ya está instalado y configurado correctamente"
+    return 0  # No necesita instalación
         log_warning "Zabbix agent ya está instalado en el sistema"
         
         if [[ "${FORCE_REINSTALL:-false}" != "true" ]]; then
@@ -617,50 +925,156 @@ zabbix_api_call() {
     local method="$1"
     local params="$2"
     local auth_required="${3:-true}"
+    local max_retries=3
+    local retry_count=0
     
-    local request_data='{
-        "jsonrpc": "2.0",
-        "method": "'$method'",
-        "params": '$params',
-        "id": 1'
+    # URLs alternativas para probar
+    local api_urls=(
+        "$ZABBIX_SERVER_URL/api_jsonrpc.php"
+        "$ZABBIX_SERVER_URL/zabbix/api_jsonrpc.php"
+    )
     
-    if [[ "$auth_required" == "true" ]] && [[ -n "$AUTH_TOKEN" ]]; then
-        request_data+=',
-        "auth": "'$AUTH_TOKEN'"'
+    # Si el servidor no tiene esquema, agregar http y https
+    if [[ ! "$ZABBIX_SERVER_URL" =~ ^https?:// ]]; then
+        local base_url="$ZABBIX_SERVER_URL"
+        api_urls=(
+            "https://$base_url/api_jsonrpc.php"
+            "https://$base_url/zabbix/api_jsonrpc.php"
+            "http://$base_url/api_jsonrpc.php"
+            "http://$base_url/zabbix/api_jsonrpc.php"
+        )
     fi
     
-    request_data+='}'
+    while [[ $retry_count -lt $max_retries ]]; do
+        for api_url in "${api_urls[@]}"; do
+            log_debug "Intentando API URL: $api_url (intento $((retry_count + 1))/$max_retries)"
+            
+            local request_data='{
+                "jsonrpc": "2.0",
+                "method": "'$method'",
+                "params": '$params',
+                "id": 1'
+            
+            # Manejar autenticación con API token o auth token
+            if [[ "$auth_required" == "true" ]]; then
+                if [[ -n "$ZABBIX_API_TOKEN" ]]; then
+                    # Usar API token en header (método moderno)
+                    local headers=(-H "Content-Type: application/json-rpc" 
+                                 -H "User-Agent: Zabbix-Installer/1.0"
+                                 -H "Authorization: Bearer $ZABBIX_API_TOKEN")
+                elif [[ -n "$AUTH_TOKEN" ]]; then
+                    # Usar session token en body (método tradicional)
+                    request_data+=',
+                    "auth": "'$AUTH_TOKEN'"'
+                    local headers=(-H "Content-Type: application/json-rpc" 
+                                 -H "User-Agent: Zabbix-Installer/1.0")
+                else
+                    log_error "No hay token de autenticación disponible"
+                    return 1
+                fi
+            else
+                local headers=(-H "Content-Type: application/json-rpc" 
+                             -H "User-Agent: Zabbix-Installer/1.0")
+            fi
+            
+            request_data+='}'
+            log_debug "API Request: $request_data"
+            
+            local response=$(curl -s \
+                "${headers[@]}" \
+                --connect-timeout 15 \
+                --max-time 30 \
+                -d "$request_data" \
+                "$api_url" 2>/dev/null)
+            
+            if [[ -n "$response" ]]; then
+                log_debug "API Response: $response"
+                
+                # Verificar si hay error en la respuesta
+                if echo "$response" | grep -q '"error"'; then
+                    local error_code=$(echo "$response" | jq -r '.error.code // empty' 2>/dev/null || echo "")
+                    local error_message=$(echo "$response" | jq -r '.error.message // empty' 2>/dev/null || 
+                                        echo "$response" | grep -o '"message":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+                    local error_data=$(echo "$response" | jq -r '.error.data // empty' 2>/dev/null || echo "")
+                    
+                    log_debug "Error de API - Código: $error_code, Mensaje: $error_message, Datos: $error_data"
+                    
+                    # Para autenticación fallida con API token, probar con session token
+                    if [[ "$method" != "user.login" && "$method" != "apiinfo.version" && -n "$ZABBIX_API_TOKEN" && "$error_code" =~ ^-?(32602|32700)$ ]]; then
+                        log_debug "API token falló, intentando con session token..."
+                        continue
+                    fi
+                    
+                    # Solo mostrar error en el último intento
+                    if [[ $retry_count -eq $((max_retries - 1)) ]]; then
+                        log_error "Error en API de Zabbix: $error_message"
+                        [[ -n "$error_data" ]] && log_error "Detalles: $error_data"
+                    fi
+                    
+                    # Si es error de autenticación, no reintentar
+                    if [[ "$error_code" =~ ^-?(32602|32700|32004)$ ]]; then
+                        return 1
+                    fi
+                else
+                    # Respuesta exitosa
+                    echo "$response"
+                    return 0
+                fi
+            else
+                log_debug "No se recibió respuesta de $api_url"
+            fi
+        done
+        
+        retry_count=$((retry_count + 1))
+        if [[ $retry_count -lt $max_retries ]]; then
+            log_debug "Reintentando en 5 segundos..."
+            sleep 5
+        fi
+    done
     
-    log_debug "API Request: $request_data"
+    log_error "No se pudo conectar a la API de Zabbix después de $max_retries intentos"
+    return 1
+}
+
+test_zabbix_connection() {
+    log_info "Probando conexión a la API de Zabbix..."
     
-    local response=$(curl -s \
-        -H "Content-Type: application/json-rpc" \
-        -H "User-Agent: Zabbix-Installer/1.0" \
-        --connect-timeout 30 \
-        --max-time 60 \
-        -d "$request_data" \
-        "$ZABBIX_SERVER_URL/api_jsonrpc.php")
-    
-    if [[ -z "$response" ]]; then
-        log_error "No se recibió respuesta de la API de Zabbix"
+    # Probar versión de API primero
+    local version_response=$(zabbix_api_call "apiinfo.version" "{}" "false")
+    if [[ $? -eq 0 && -n "$version_response" ]]; then
+        local version=$(echo "$version_response" | jq -r '.result // empty' 2>/dev/null || 
+                       echo "$version_response" | grep -o '"result":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+        log_success "Conexión exitosa. Versión del servidor: $version"
+        
+        # Probar autenticación
+        if [[ -n "$ZABBIX_API_TOKEN" ]]; then
+            log_info "Probando autenticación con API token..."
+            local test_auth=$(zabbix_api_call "hostgroup.get" '{"output": ["groupid"], "limit": 1}' "true")
+            if [[ $? -eq 0 ]]; then
+                log_success "Autenticación con API token exitosa"
+                return 0
+            else
+                log_warning "Fallo autenticación con API token"
+                return 1
+            fi
+        else
+            log_info "Se requerirá autenticación con usuario/contraseña"
+            return 0
+        fi
+    else
+        log_error "No se pudo conectar a la API de Zabbix"
         return 1
     fi
-    
-    log_debug "API Response: $response"
-    
-    # Verificar si hay error en la respuesta
-    if echo "$response" | grep -q '"error"'; then
-        local error_message=$(echo "$response" | grep -o '"message":"[^"]*"' | cut -d':' -f2 | tr -d '"')
-        log_error "Error en API de Zabbix: $error_message"
-        return 1
-    fi
-    
-    echo "$response"
-    return 0
 }
 
 zabbix_authenticate() {
-    log_info "Autenticando con la API de Zabbix..."
+    # Si ya tenemos API token, no necesitamos autenticar
+    if [[ -n "$ZABBIX_API_TOKEN" ]]; then
+        log_info "Usando API token para autenticación"
+        return 0
+    fi
+    
+    log_info "Autenticando con usuario/contraseña..."
     
     local auth_params='{
         "user": "'$ZABBIX_API_USER'",
@@ -670,14 +1084,15 @@ zabbix_authenticate() {
     local response=$(zabbix_api_call "user.login" "$auth_params" "false")
     if [[ $? -ne 0 ]]; then
         log_error "Error en autenticación con Zabbix"
-        exit 1
+        return 1
     fi
     
-    AUTH_TOKEN=$(echo "$response" | grep -o '"result":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+    AUTH_TOKEN=$(echo "$response" | jq -r '.result // empty' 2>/dev/null || 
+                echo "$response" | grep -o '"result":"[^"]*"' | cut -d':' -f2 | tr -d '"')
     
     if [[ -z "$AUTH_TOKEN" ]]; then
         log_error "No se pudo obtener token de autenticación"
-        exit 1
+        return 1
     fi
     
     log_success "Autenticación exitosa con Zabbix"
@@ -731,6 +1146,33 @@ check_host_exists() {
 get_hostgroup_id() {
     log_info "Obteniendo ID del grupo de hosts: $ZABBIX_HOST_GROUP"
     
+    # Si tenemos un ID conocido, verificar que existe y usarlo
+    if [[ -n "$ZABBIX_KNOWN_GROUP_ID" ]]; then
+        log_debug "Verificando ID de grupo conocido: $ZABBIX_KNOWN_GROUP_ID"
+        
+        local verify_params='{
+            "output": ["groupid", "name"],
+            "groupids": ["'$ZABBIX_KNOWN_GROUP_ID'"]
+        }'
+        
+        local response=$(zabbix_api_call "hostgroup.get" "$verify_params")
+        if [[ $? -eq 0 ]]; then
+            local found_name=$(echo "$response" | jq -r '.result[0].name // empty' 2>/dev/null || 
+                              echo "$response" | grep -o '"name":"[^"]*"' | head -1 | cut -d':' -f2 | tr -d '"')
+            
+            if [[ -n "$found_name" ]]; then
+                log_success "Usando ID de grupo conocido: $ZABBIX_KNOWN_GROUP_ID (nombre: $found_name)"
+                echo "$ZABBIX_KNOWN_GROUP_ID"
+                return 0
+            else
+                log_warning "ID de grupo conocido $ZABBIX_KNOWN_GROUP_ID no es válido, buscando por nombre..."
+            fi
+        else
+            log_warning "Error verificando ID de grupo conocido, buscando por nombre..."
+        fi
+    fi
+    
+    # Buscar por nombre
     local group_params='{
         "output": ["groupid", "name"],
         "filter": {
@@ -744,7 +1186,8 @@ get_hostgroup_id() {
         return 1
     fi
     
-    local group_id=$(echo "$response" | grep -o '"groupid":"[^"]*"' | head -1 | cut -d':' -f2 | tr -d '"')
+    local group_id=$(echo "$response" | jq -r '.result[0].groupid // empty' 2>/dev/null || 
+                    echo "$response" | grep -o '"groupid":"[^"]*"' | head -1 | cut -d':' -f2 | tr -d '"')
     
     if [[ -z "$group_id" ]]; then
         log_warning "Grupo '$ZABBIX_HOST_GROUP' no encontrado, creando..."
@@ -782,6 +1225,128 @@ create_hostgroup() {
     return 0
 }
 
+get_template_id() {
+    log_info "Obteniendo ID del template: $ZABBIX_TEMPLATE_NAME"
+    
+    # Si tenemos un ID conocido, verificar que existe y usarlo
+    if [[ -n "$ZABBIX_KNOWN_TEMPLATE_ID" ]]; then
+        log_debug "Verificando ID de template conocido: $ZABBIX_KNOWN_TEMPLATE_ID"
+        
+        local verify_params='{
+            "output": ["templateid", "host", "name"],
+            "templateids": ["'$ZABBIX_KNOWN_TEMPLATE_ID'"]
+        }'
+        
+        local response=$(zabbix_api_call "template.get" "$verify_params")
+        if [[ $? -eq 0 ]]; then
+            local found_name=$(echo "$response" | jq -r '.result[0].name // .result[0].host // empty' 2>/dev/null || 
+                              echo "$response" | grep -o '"name":"[^"]*"' | head -1 | cut -d':' -f2 | tr -d '"')
+            
+            if [[ -n "$found_name" ]]; then
+                log_success "Usando ID de template conocido: $ZABBIX_KNOWN_TEMPLATE_ID (nombre: $found_name)"
+                echo "$ZABBIX_KNOWN_TEMPLATE_ID"
+                return 0
+            else
+                log_warning "ID de template conocido $ZABBIX_KNOWN_TEMPLATE_ID no es válido, buscando por nombre..."
+            fi
+        else
+            log_warning "Error verificando ID de template conocido, buscando por nombre..."
+        fi
+    fi
+    
+    # Buscar por nombre
+    local template_params='{
+        "output": ["templateid", "host", "name"],
+        "filter": {
+            "name": ["'$ZABBIX_TEMPLATE_NAME'"]
+        }
+    }'
+    
+    local response=$(zabbix_api_call "template.get" "$template_params")
+    if [[ $? -ne 0 ]]; then
+        log_warning "Error consultando templates por nombre, intentando por host..."
+        
+        # Intentar buscar por host (nombre técnico)
+        template_params='{
+            "output": ["templateid", "host", "name"],
+            "filter": {
+                "host": ["'$ZABBIX_TEMPLATE_NAME'"]
+            }
+        }'
+        
+        response=$(zabbix_api_call "template.get" "$template_params")
+        if [[ $? -ne 0 ]]; then
+            log_error "Error consultando templates"
+            return 1
+        fi
+    fi
+    
+    local template_id=$(echo "$response" | jq -r '.result[0].templateid // empty' 2>/dev/null || 
+                       echo "$response" | grep -o '"templateid":"[^"]*"' | head -1 | cut -d':' -f2 | tr -d '"')
+    
+    if [[ -z "$template_id" ]]; then
+        log_warning "Template '$ZABBIX_TEMPLATE_NAME' no encontrado"
+        
+        # Lista de templates comunes de Linux como fallback
+        local common_templates=("Linux by Zabbix agent" "Template OS Linux" "Template OS Linux by Zabbix agent" "10001")
+        
+        for fallback_template in "${common_templates[@]}"; do
+            if [[ "$fallback_template" == "$ZABBIX_TEMPLATE_NAME" ]]; then
+                continue  # Ya lo intentamos
+            fi
+            
+            log_info "Intentando template fallback: $fallback_template"
+            
+            if [[ "$fallback_template" =~ ^[0-9]+$ ]]; then
+                # Es un ID numérico, verificar directamente
+                local verify_params='{
+                    "output": ["templateid", "host", "name"],
+                    "templateids": ["'$fallback_template'"]
+                }'
+                
+                local fallback_response=$(zabbix_api_call "template.get" "$verify_params")
+                if [[ $? -eq 0 ]]; then
+                    local found_id=$(echo "$fallback_response" | jq -r '.result[0].templateid // empty' 2>/dev/null || 
+                                    echo "$fallback_response" | grep -o '"templateid":"[^"]*"' | head -1 | cut -d':' -f2 | tr -d '"')
+                    
+                    if [[ -n "$found_id" ]]; then
+                        log_success "Usando template fallback con ID: $found_id"
+                        echo "$found_id"
+                        return 0
+                    fi
+                fi
+            else
+                # Buscar por nombre
+                local fallback_params='{
+                    "output": ["templateid", "host", "name"],
+                    "search": {
+                        "name": "'$fallback_template'"
+                    }
+                }'
+                
+                local fallback_response=$(zabbix_api_call "template.get" "$fallback_params")
+                if [[ $? -eq 0 ]]; then
+                    local found_id=$(echo "$fallback_response" | jq -r '.result[0].templateid // empty' 2>/dev/null || 
+                                    echo "$fallback_response" | grep -o '"templateid":"[^"]*"' | head -1 | cut -d':' -f2 | tr -d '"')
+                    
+                    if [[ -n "$found_id" ]]; then
+                        log_success "Usando template fallback: $fallback_template (ID: $found_id)"
+                        echo "$found_id"
+                        return 0
+                    fi
+                fi
+            fi
+        done
+        
+        log_error "No se encontró ningún template válido para Linux"
+        return 1
+    fi
+    
+    log_success "ID del template '$ZABBIX_TEMPLATE_NAME': $template_id"
+    echo "$template_id"
+    return 0
+}
+
 register_host_zabbix() {
     log_info "Registrando host en Zabbix..."
     
@@ -790,6 +1355,13 @@ register_host_zabbix() {
     if [[ $? -ne 0 ]] || [[ -z "$group_id" ]]; then
         log_error "No se pudo obtener ID del grupo de hosts"
         return 1
+    fi
+    
+    # Obtener ID del template
+    local template_id=$(get_template_id)
+    if [[ $? -ne 0 ]] || [[ -z "$template_id" ]]; then
+        log_warning "No se pudo obtener ID del template, continuando sin template..."
+        template_id=""
     fi
     
     # Extraer servidor de la URL para configuración
@@ -812,12 +1384,19 @@ register_host_zabbix() {
             {
                 "groupid": "'$group_id'"
             }
-        ],
+        ]'
+    
+    # Agregar template si se encontró uno válido
+    if [[ -n "$template_id" ]]; then
+        host_params+=',
         "templates": [
             {
-                "templateid": "10001"
+                "templateid": "'$template_id'"
             }
-        ],
+        ]'
+    fi
+    
+    host_params+=',
         "inventory_mode": 1,
         "inventory": {
             "os": "'$(uname -a)'",
@@ -999,44 +1578,146 @@ configure_zabbix_agent() {
     return 0
 }
 
+get_zabbix_service_name() {
+    local service_names=("zabbix-agent" "zabbix-agent2")
+    
+    for service_name in "${service_names[@]}"; do
+        if systemctl list-unit-files --type=service 2>/dev/null | grep -q "^$service_name.service"; then
+            echo "$service_name"
+            return 0
+        fi
+    done
+    
+    # Fallback: buscar por paquetes instalados
+    case "$DISTRO" in
+        "ubuntu"|"debian")
+            if dpkg -l | grep -q "zabbix-agent2"; then
+                echo "zabbix-agent2"
+                return 0
+            elif dpkg -l | grep -q "zabbix-agent"; then
+                echo "zabbix-agent"
+                return 0
+            fi
+            ;;
+        "centos"|"rhel"|"rocky"|"almalinux")
+            if rpm -qa | grep -q "zabbix-agent2-"; then
+                echo "zabbix-agent2"
+                return 0
+            elif rpm -qa | grep -q "zabbix-agent-"; then
+                echo "zabbix-agent"
+                return 0
+            fi
+            ;;
+    esac
+    
+    return 1
+}
+
 setup_zabbix_service() {
     log_info "Configurando servicio de Zabbix..."
     
-    # Habilitar y iniciar el servicio
-    systemctl enable zabbix-agent || {
-        log_error "Error habilitando servicio zabbix-agent"
+    # Detectar el nombre correcto del servicio
+    local service_name=$(get_zabbix_service_name)
+    if [[ -z "$service_name" ]]; then
+        log_error "No se pudo determinar el nombre del servicio Zabbix"
         return 1
-    }
-    
-    # Detener el servicio si está corriendo para aplicar nueva configuración
-    if systemctl is-active --quiet zabbix-agent; then
-        log_info "Deteniendo servicio existente..."
-        systemctl stop zabbix-agent || {
-            log_error "Error deteniendo servicio zabbix-agent"
-            return 1
-        }
     fi
+    
+    log_info "Servicio detectado: $service_name"
+    
+    # Verificar si el servicio existe
+    if ! systemctl list-unit-files --type=service 2>/dev/null | grep -q "^$service_name.service"; then
+        log_error "Servicio $service_name no encontrado"
+        return 1
+    fi
+    
+    # Habilitar el servicio para inicio automático
+    log_info "Habilitando servicio $service_name para inicio automático..."
+    if ! systemctl enable "$service_name" 2>/dev/null; then
+        log_warning "No se pudo habilitar $service_name para inicio automático"
+    else
+        log_success "Servicio $service_name habilitado para inicio automático"
+    fi
+    
+    # Verificar si el servicio está corriendo y detenerlo para aplicar nueva configuración
+    if systemctl is-active --quiet "$service_name"; then
+        log_info "Deteniendo servicio existente $service_name..."
+        if ! systemctl stop "$service_name" 2>/dev/null; then
+            log_warning "No se pudo detener el servicio $service_name correctamente"
+        else
+            # Esperar un momento para asegurar que se detuvo
+            sleep 2
+        fi
+    fi
+    
+    # Recargar la configuración de systemd
+    systemctl daemon-reload 2>/dev/null || true
     
     # Iniciar el servicio
-    log_info "Iniciando servicio zabbix-agent..."
-    systemctl start zabbix-agent || {
-        log_error "Error iniciando servicio zabbix-agent"
-        log_info "Verificando logs..."
-        journalctl -u zabbix-agent --no-pager -l | tail -10
-        return 1
-    }
+    log_info "Iniciando servicio $service_name..."
+    local max_attempts=3
+    local attempt=1
     
-    # Verificar que el servicio está corriendo
-    sleep 3
-    if ! systemctl is-active --quiet zabbix-agent; then
-        log_error "Servicio zabbix-agent no está corriendo"
-        log_info "Estado del servicio:"
-        systemctl status zabbix-agent --no-pager -l
-        return 1
-    fi
+    while [[ $attempt -le $max_attempts ]]; do
+        log_debug "Intento $attempt de $max_attempts para iniciar $service_name"
+        
+        if systemctl start "$service_name" 2>/dev/null; then
+            log_debug "Comando de inicio ejecutado correctamente"
+            
+            # Esperar un momento y verificar el estado
+            sleep 3
+            
+            if systemctl is-active --quiet "$service_name"; then
+                log_success "Servicio $service_name iniciado correctamente"
+                
+                # Verificar que está escuchando en el puerto
+                local port=$ZABBIX_AGENT_PORT
+                if ss -tuln 2>/dev/null | grep -q ":$port " || netstat -tuln 2>/dev/null | grep -q ":$port "; then
+                    log_success "Servicio $service_name está escuchando en puerto $port"
+                else
+                    log_warning "Servicio $service_name está corriendo pero no parece estar escuchando en puerto $port"
+                fi
+                
+                return 0
+            else
+                log_warning "Servicio $service_name no está activo después del inicio (intento $attempt)"
+            fi
+        else
+            log_warning "Error al ejecutar comando de inicio para $service_name (intento $attempt)"
+        fi
+        
+        # Mostrar logs para diagnóstico
+        if [[ $attempt -eq $max_attempts ]]; then
+            log_error "No se pudo iniciar el servicio $service_name después de $max_attempts intentos"
+            log_info "Estado del servicio:"
+            systemctl status "$service_name" --no-pager -l 2>/dev/null || true
+            log_info "Últimos logs del servicio:"
+            journalctl -u "$service_name" --no-pager -l -n 20 2>/dev/null || true
+            
+            # Verificar configuración
+            if [[ -f "$ZABBIX_CONFIG_FILE" ]]; then
+                log_info "Verificando sintaxis de configuración..."
+                local config_check=""
+                if [[ "$service_name" == "zabbix-agent2" ]]; then
+                    config_check=$(zabbix_agent2 -t -c "$ZABBIX_CONFIG_FILE" 2>&1 || true)
+                else
+                    config_check=$(zabbix_agentd -t -c "$ZABBIX_CONFIG_FILE" 2>&1 || true)
+                fi
+                
+                if [[ -n "$config_check" ]]; then
+                    log_info "Resultado de verificación: $config_check"
+                fi
+            fi
+            
+            return 1
+        fi
+        
+        attempt=$((attempt + 1))
+        log_info "Reintentando en 5 segundos..."
+        sleep 5
+    done
     
-    log_success "Servicio zabbix-agent configurado y corriendo"
-    return 0
+    return 1
 }
 
 configure_firewall() {
