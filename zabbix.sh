@@ -208,9 +208,8 @@ detect_primary_ip() {
     local excluded_ip_patterns=(
         "127\."          # Loopback
         "169\.254\."     # APIPA/Link-local
-        "172\.1[6-9]\."  # Docker default range start
-        "172\.2[0-9]\."  # Docker default range middle
-        "172\.3[0-1]\."  # Docker default range end
+        "172\.1[6-9]\."  # Docker default range 172.16-19.x.x
+        "172\.3[0-1]\."  # Docker default range 172.30-31.x.x
         "192\.168\.27\." # VirtualBox host-only
         "192\.168\.56\." # VirtualBox host-only default
         "10\.0\.75\."    # Hyper-V default
@@ -489,10 +488,18 @@ get_package_manager_info() {
             # Actualizar repositorios
             log_info "Actualizando repositorios APT..."
             export DEBIAN_FRONTEND=noninteractive
-            apt-get update -qq || {
-                log_error "Error al actualizar repositorios APT"
-                exit 1
-            }
+            
+            # Intentar actualizar, pero no fallar si hay repositorios rotos de terceros
+            if ! apt-get update -qq 2>&1 | tee /tmp/apt_update.log; then
+                # Verificar si el error es solo de repositorios de terceros
+                if grep -q "repo.mysql.com\|packages.microsoft.com" /tmp/apt_update.log 2>/dev/null; then
+                    log_warning "Algunos repositorios de terceros tienen errores, pero continuando..."
+                    log_debug "Errores encontrados en repositorios de terceros (MySQL, Microsoft, etc)"
+                else
+                    log_error "Error crítico al actualizar repositorios APT"
+                    exit 1
+                fi
+            fi
             
             # Instalar dependencias si no están presentes
             local required_packages=("curl" "wget" "gnupg" "lsb-release")
