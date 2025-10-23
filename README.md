@@ -52,15 +52,13 @@ El método más seguro y conveniente es descargar y ejecutar el script en una so
 curl -fsSL https://raw.githubusercontent.com/tu-usuario/zabbix-installer/main/zabbix.sh | \
     sudo bash -s -- \
         --server-url "http://tu-servidor-zabbix.com" \
-        --api-user "admin" \
-        --api-password "tu-password"
+        --api-token "your-api-token-here"
 
 # Instalación con configuración personalizada
 curl -fsSL https://raw.githubusercontent.com/tu-usuario/zabbix-installer/main/zabbix.sh | \
     sudo bash -s -- \
         --server-url "https://monitoring.empresa.com" \
-        --api-user "api-user" \
-        --api-password "password-seguro" \
+        --api-token "your-api-token-here" \
         --host-group "Servidores Producción" \
         --force-reinstall \
         --debug
@@ -69,8 +67,7 @@ curl -fsSL https://raw.githubusercontent.com/tu-usuario/zabbix-installer/main/za
 curl -fsSL https://raw.githubusercontent.com/tu-usuario/zabbix-installer/main/zabbix.sh | \
     sudo bash -s -- \
         --server-url "http://zabbix.test.com" \
-        --api-user "test" \
-        --api-password "test" \
+        --api-token "test-token-123" \
         --dry-run
 ```
 
@@ -94,14 +91,12 @@ chmod +x zabbix.sh
 # Instalación básica con parámetros
 sudo ./zabbix.sh \
     --server-url "http://zabbix.empresa.com" \
-    --api-user "admin" \
-    --api-password "mi-password"
+    --api-token "8a29710542180b6eb941de2b55aeeeba833589d4118689a33a223b0f10537323"
 
 # Con todas las opciones
 sudo ./zabbix.sh \
     --server-url "https://monitoring.empresa.com" \
-    --api-user "api-user" \
-    --api-password "password-seguro" \
+    --api-token "your-api-token-here" \
     --host-group "Servidores Linux" \
     --server-port "10051" \
     --agent-port "10050" \
@@ -113,8 +108,7 @@ sudo ./zabbix.sh \
 
 ```bash
 export ZABBIX_SERVER_URL="http://tu-servidor-zabbix.com"
-export ZABBIX_API_USER="admin"
-export ZABBIX_API_PASSWORD="tu-password"
+export ZABBIX_API_TOKEN="8a29710542180b6eb941de2b55aeeeba833589d4118689a33a223b0f10537323"
 export ZABBIX_HOST_GROUP="Linux servers"        # Opcional
 export FORCE_REINSTALL="false"                  # Opcional
 export UPDATE_EXISTING_HOST="false"             # Opcional
@@ -132,8 +126,7 @@ sudo -E ./zabbix.sh
 curl -fsSL https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \
     sudo bash -s -- \
         --server-url "http://zabbix.empresa.com" \
-        --api-user "admin" \
-        --api-password "zabbix123"
+        --api-token "8a29710542180b6eb941de2b55aeeeba833589d4118689a33a223b0f10537323"
 ```
 
 ### Ejemplo 2: Instalación de Producción con HTTPS
@@ -143,8 +136,7 @@ curl -fsSL https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \
 curl -fsSL https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \
     sudo bash -s -- \
         --server-url "https://monitoring.empresa.com" \
-        --api-user "production-api" \
-        --api-password "password-complejo-seguro" \
+        --api-token "production-api-token-here" \
         --host-group "Servidores Producción" \
         --agent-port "10050"
 ```
@@ -158,8 +150,7 @@ chmod +x zabbix.sh
 
 sudo ./zabbix.sh \
     --server-url "http://zabbix.local" \
-    --api-user "admin" \
-    --api-password "admin" \
+    --api-token "local-test-token" \
     --host-group "Test Servers" \
     --debug
 ```
@@ -171,8 +162,7 @@ sudo ./zabbix.sh \
 curl -fsSL https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \
     sudo bash -s -- \
         --server-url "http://test.zabbix.com" \
-        --api-user "test-user" \
-        --api-password "test-pass" \
+        --api-token "test-token-123" \
         --dry-run
 ```
 
@@ -183,8 +173,7 @@ curl -fsSL https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \
 curl -fsSL https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \
     sudo bash -s -- \
         --server-url "http://zabbix.empresa.com" \
-        --api-user "admin" \
-        --api-password "admin" \
+        --api-token "your-api-token" \
         --force-reinstall
 ```
 
@@ -194,8 +183,7 @@ curl -fsSL https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \
 # Actualizar configuración de host existente
 sudo ./zabbix.sh \
     --server-url "http://zabbix.local" \
-    --api-user "admin" \
-    --api-password "admin" \
+    --api-token "your-api-token" \
     --update-existing
 ```
 

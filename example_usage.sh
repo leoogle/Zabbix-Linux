@@ -70,25 +70,24 @@ case $option in
         print_info "Este método es más seguro ya que no expone credenciales en variables de entorno"
         echo
         read -p "URL del servidor Zabbix (ej: http://zabbix.ejemplo.com): " server_url
-        read -p "Usuario API de Zabbix: " api_user
-        read -s -p "Contraseña API de Zabbix: " api_password
+        read -s -p "Token API de Zabbix: " api_token
         echo
         read -p "Grupo de hosts (opcional, Enter para default): " host_group
         
-        if [[ -z "$server_url" ]] || [[ -z "$api_user" ]] || [[ -z "$api_password" ]]; then
-            print_error "URL, usuario y contraseña son requeridos"
+        if [[ -z "$server_url" ]] || [[ -z "$api_token" ]]; then
+            print_error "URL y token de API son requeridos"
             exit 1
         fi
         
         print_info "Ejecutando instalación con parámetros..."
         
-        cmd="sudo '$ZABBIX_SCRIPT' --server-url '$server_url' --api-user '$api_user' --api-password '$api_password'"
+        cmd="sudo '$ZABBIX_SCRIPT' --server-url '$server_url' --api-token '$api_token'"
         if [[ -n "$host_group" ]]; then
             cmd+=" --host-group '$host_group'"
         fi
         
         echo "Comando a ejecutar:"
-        echo "sudo $ZABBIX_SCRIPT --server-url '$server_url' --api-user '$api_user' --api-password '***' [--host-group '$host_group']"
+        echo "sudo $ZABBIX_SCRIPT --server-url '$server_url' --api-token '***' [--host-group '$host_group']"
         
         eval "$cmd"
         ;;
@@ -99,11 +98,10 @@ case $option in
         print_warning "En producción, reemplace la URL con la ubicación real del script"
         echo
         read -p "URL del servidor Zabbix: " server_url
-        read -p "Usuario API: " api_user
-        read -s -p "Contraseña API: " api_password
+        read -s -p "Token API: " api_token
         echo
         
-        if [[ -z "$server_url" ]] || [[ -z "$api_user" ]] || [[ -z "$api_password" ]]; then
+        if [[ -z "$server_url" ]] || [[ -z "$api_token" ]]; then
             print_error "Todos los campos son requeridos"
             exit 1
         fi
@@ -113,12 +111,11 @@ case $option in
         echo "curl -fsSL https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \\"
         echo "    sudo bash -s -- \\"
         echo "        --server-url '$server_url' \\"
-        echo "        --api-user '$api_user' \\"
-        echo "        --api-password '$api_password'"
+        echo "        --api-token '$api_token'"
         echo
         
         print_info "Ejecutando localmente..."
-        sudo "$ZABBIX_SCRIPT" --server-url "$server_url" --api-user "$api_user" --api-password "$api_password"
+        sudo "$ZABBIX_SCRIPT" --server-url "$server_url" --api-token "$api_token"
         ;;
         
     3)
@@ -126,18 +123,16 @@ case $option in
         print_warning "Este método es menos seguro pero aún soportado"
         
         read -p "URL del servidor Zabbix: " server_url
-        read -p "Usuario API: " api_user
-        read -s -p "Contraseña API: " api_password
+        read -s -p "Token API: " api_token
         echo
         
-        if [[ -z "$server_url" ]] || [[ -z "$api_user" ]] || [[ -z "$api_password" ]]; then
+        if [[ -z "$server_url" ]] || [[ -z "$api_token" ]]; then
             print_error "Todos los campos son requeridos"
             exit 1
         fi
         
         export ZABBIX_SERVER_URL="$server_url"
-        export ZABBIX_API_USER="$api_user"
-        export ZABBIX_API_PASSWORD="$api_password"
+        export ZABBIX_API_TOKEN="$api_token"
         export DEBUG="true"
         
         print_info "Variables de entorno configuradas, ejecutando..."
@@ -151,8 +146,7 @@ case $option in
         print_info "Usando configuración de prueba..."
         sudo "$ZABBIX_SCRIPT" \
             --server-url "http://zabbix.ejemplo.com" \
-            --api-user "test-user" \
-            --api-password "test-password" \
+            --api-token "test-token-123" \
             --dry-run
         ;;
         
@@ -161,11 +155,10 @@ case $option in
         print_warning "Esta opción reinstalará Zabbix aunque ya esté instalado"
         
         read -p "URL del servidor Zabbix: " server_url
-        read -p "Usuario API: " api_user
-        read -s -p "Contraseña API: " api_password
+        read -s -p "Token API: " api_token
         echo
         
-        if [[ -z "$server_url" ]] || [[ -z "$api_user" ]] || [[ -z "$api_password" ]]; then
+        if [[ -z "$server_url" ]] || [[ -z "$api_token" ]]; then
             print_error "Todos los campos son requeridos"
             exit 1
         fi
@@ -175,8 +168,7 @@ case $option in
         if [[ "$confirm" =~ ^[Yy]$ ]]; then
             sudo "$ZABBIX_SCRIPT" \
                 --server-url "$server_url" \
-                --api-user "$api_user" \
-                --api-password "$api_password" \
+                --api-token "$api_token" \
                 --force-reinstall \
                 --debug
         else
@@ -189,11 +181,10 @@ case $option in
         print_info "Esta opción actualiza un host que ya existe en Zabbix"
         
         read -p "URL del servidor Zabbix: " server_url
-        read -p "Usuario API: " api_user
-        read -s -p "Contraseña API: " api_password
+        read -s -p "Token API: " api_token
         echo
         
-        if [[ -z "$server_url" ]] || [[ -z "$api_user" ]] || [[ -z "$api_password" ]]; then
+        if [[ -z "$server_url" ]] || [[ -z "$api_token" ]]; then
             print_error "Todos los campos son requeridos"
             exit 1
         fi
@@ -201,8 +192,7 @@ case $option in
         print_info "Ejecutando actualización de host existente..."
         sudo "$ZABBIX_SCRIPT" \
             --server-url "$server_url" \
-            --api-user "$api_user" \
-            --api-password "$api_password" \
+            --api-token "$api_token" \
             --update-existing
         ;;
         
@@ -211,8 +201,7 @@ case $option in
         print_info "Instalación con configuraciones recomendadas para producción"
         
         read -p "URL del servidor Zabbix (HTTPS recomendado): " server_url
-        read -p "Usuario API: " api_user
-        read -s -p "Contraseña API: " api_password
+        read -s -p "Token API: " api_token
         echo
         read -p "Grupo de hosts (default: Production Servers): " host_group
         read -p "Puerto del agente (default: 10050): " agent_port
@@ -221,8 +210,8 @@ case $option in
         host_group="${host_group:-Production Servers}"
         agent_port="${agent_port:-10050}"
         
-        if [[ -z "$server_url" ]] || [[ -z "$api_user" ]] || [[ -z "$api_password" ]]; then
-            print_error "URL, usuario y contraseña son requeridos"
+        if [[ -z "$server_url" ]] || [[ -z "$api_token" ]]; then
+            print_error "URL y token de API son requeridos"
             exit 1
         fi
         
@@ -242,15 +231,14 @@ case $option in
         echo "  - Puerto: $agent_port"
         
         print_info "Comando completo:"
-        echo "sudo $ZABBIX_SCRIPT --server-url '$server_url' --api-user '$api_user' --api-password '***' --host-group '$host_group' --agent-port '$agent_port'"
+        echo "sudo $ZABBIX_SCRIPT --server-url '$server_url' --api-token '***' --host-group '$host_group' --agent-port '$agent_port'"
         echo
         
         read -p "¿Confirmar instalación? (y/N): " confirm
         if [[ "$confirm" =~ ^[Yy]$ ]]; then
             sudo "$ZABBIX_SCRIPT" \
                 --server-url "$server_url" \
-                --api-user "$api_user" \
-                --api-password "$api_password" \
+                --api-token "$api_token" \
                 --host-group "$host_group" \
                 --agent-port "$agent_port"
         else

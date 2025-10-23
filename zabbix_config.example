@@ -13,9 +13,10 @@
 #   http://192.168.1.100
 export ZABBIX_SERVER_URL="http://zabbix.local"
 
-# Credenciales para la API de Zabbix (REQUERIDOS)
-export ZABBIX_API_USER="admin"
-export ZABBIX_API_PASSWORD="zabbix"
+# Token de API de Zabbix (REQUERIDO)
+# Obtenga su token desde: Administración -> API tokens en la interfaz web de Zabbix
+# Ejemplo: 8a29710542180b6eb941de2b55aeeeba833589d4118689a33a223b0f10537323
+export ZABBIX_API_TOKEN="your-api-token-here"
 
 #################################################################################
 #                          CONFIGURACIÓN AVANZADA                              #

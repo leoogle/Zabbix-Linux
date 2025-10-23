@@ -10,12 +10,8 @@
 # Uso: ./zabbix.sh                                                             #
 # Variables de entorno requeridas:                                             #
 #   ZABBIX_SERVER_URL      - URL del servidor Zabbix (ej: http://zabbix.local) #
-#                                                                               #
-# Autenticación (una de las siguientes opciones):                             #
-#   ZABBIX_API_TOKEN       - API token para autenticación (recomendado)       #
-#   O:                                                                          #
-#   ZABBIX_API_USER        - Usuario para API de Zabbix                       #
-#   ZABBIX_API_PASSWORD    - Contraseña para API de Zabbix                    #
+#   ZABBIX_API_TOKEN       - Token de API para autenticación                  #
+#                            (ej: 8a29710542180b6eb941de2b55aeeeba...)         #
 #                                                                               #
 # Variables opcionales:                                                         #
 #   ZABBIX_HOST_GROUP      - Grupo de hosts (default: "Linux servers")        #
@@ -27,7 +23,7 @@
 #   ZABBIX_AGENT_PORT      - Puerto del agente (default: 10050)               #
 #                                                                               #
 # Características mejoradas:                                                   #
-# - Soporte para API tokens y autenticación tradicional                       #
+# - Autenticación mediante API token                                          #
 # - URLs de fallback automático para diferentes configuraciones de Zabbix     #
 # - Detección inteligente de IP excluyendo interfaces virtuales               #
 # - Verificación y comparación de versiones del agente                        #
@@ -41,8 +37,6 @@ set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
 # Variables de configuración (pueden ser sobrescritas por parámetros o variables de entorno)
 ZABBIX_SERVER_URL="${ZABBIX_SERVER_URL:-}"
-ZABBIX_API_USER="${ZABBIX_API_USER:-}"
-ZABBIX_API_PASSWORD="${ZABBIX_API_PASSWORD:-}"
 ZABBIX_API_TOKEN="${ZABBIX_API_TOKEN:-}"
 ZABBIX_HOST_GROUP="${ZABBIX_HOST_GROUP:-Linux servers}"
 ZABBIX_SERVER_PORT="${ZABBIX_SERVER_PORT:-10051}"
@@ -56,8 +50,6 @@ ZABBIX_TEMPLATE_NAME="${ZABBIX_TEMPLATE_NAME:-Linux by Zabbix agent}"
 
 # Variables para parámetros de línea de comandos
 PARAM_SERVER_URL=""
-PARAM_API_USER=""
-PARAM_API_PASSWORD=""
 PARAM_API_TOKEN=""
 PARAM_HOST_GROUP=""
 PARAM_SERVER_PORT=""
@@ -67,7 +59,6 @@ PARAM_AGENT_PORT=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="/tmp/zabbix_install_$(date +%Y%m%d_%H%M%S).log"
 BACKUP_DIR="/tmp/zabbix_backup_$(date +%Y%m%d_%H%M%S)"
-AUTH_TOKEN=""
 HOST_IP=""
 HOSTNAME=""
 DISTRO=""
@@ -148,12 +139,6 @@ validate_requirements() {
     if [[ -n "$PARAM_SERVER_URL" ]]; then
         ZABBIX_SERVER_URL="$PARAM_SERVER_URL"
     fi
-    if [[ -n "$PARAM_API_USER" ]]; then
-        ZABBIX_API_USER="$PARAM_API_USER"
-    fi
-    if [[ -n "$PARAM_API_PASSWORD" ]]; then
-        ZABBIX_API_PASSWORD="$PARAM_API_PASSWORD"
-    fi
     if [[ -n "$PARAM_API_TOKEN" ]]; then
         ZABBIX_API_TOKEN="$PARAM_API_TOKEN"
     fi
@@ -174,15 +159,10 @@ validate_requirements() {
         exit 1
     fi
     
-    # Validar que se proporcione autenticación (API token O usuario/contraseña)
-    if [[ -n "$ZABBIX_API_TOKEN" ]]; then
-        log_info "Usando autenticación con API token"
-    elif [[ -n "$ZABBIX_API_USER" && -n "$ZABBIX_API_PASSWORD" ]]; then
-        log_info "Usando autenticación con usuario/contraseña"
-    else
-        log_error "Se requiere autenticación: API token o usuario/contraseña"
-        log_info "Use: --api-token <TOKEN> o export ZABBIX_API_TOKEN='your_token'"
-        log_info "O: --api-user <USER> --api-password <PASS>"
+    # Validar que se proporcione el API token
+    if [[ -z "$ZABBIX_API_TOKEN" ]]; then
+        log_error "Se requiere el token de API de Zabbix"
+        log_info "Use: --api-token <TOKEN> o export ZABBIX_API_TOKEN='8a29710542180b6eb941de2b55aeeeba...'"
         exit 1
     fi
     
@@ -955,23 +935,16 @@ zabbix_api_call() {
                 "params": '$params',
                 "id": 1'
             
-            # Manejar autenticación con API token o auth token
+            # Manejar autenticación con API token
             if [[ "$auth_required" == "true" ]]; then
-                if [[ -n "$ZABBIX_API_TOKEN" ]]; then
-                    # Usar API token en header (método moderno)
-                    local headers=(-H "Content-Type: application/json-rpc" 
-                                 -H "User-Agent: Zabbix-Installer/1.0"
-                                 -H "Authorization: Bearer $ZABBIX_API_TOKEN")
-                elif [[ -n "$AUTH_TOKEN" ]]; then
-                    # Usar session token en body (método tradicional)
-                    request_data+=',
-                    "auth": "'$AUTH_TOKEN'"'
-                    local headers=(-H "Content-Type: application/json-rpc" 
-                                 -H "User-Agent: Zabbix-Installer/1.0")
-                else
-                    log_error "No hay token de autenticación disponible"
+                if [[ -z "$ZABBIX_API_TOKEN" ]]; then
+                    log_error "No hay token de API disponible"
                     return 1
                 fi
+                # Usar API token en header
+                local headers=(-H "Content-Type: application/json-rpc" 
+                             -H "User-Agent: Zabbix-Installer/1.0"
+                             -H "Authorization: Bearer $ZABBIX_API_TOKEN")
             else
                 local headers=(-H "Content-Type: application/json-rpc" 
                              -H "User-Agent: Zabbix-Installer/1.0")
@@ -998,12 +971,6 @@ zabbix_api_call() {
                     local error_data=$(echo "$response" | jq -r '.error.data // empty' 2>/dev/null || echo "")
                     
                     log_debug "Error de API - Código: $error_code, Mensaje: $error_message, Datos: $error_data"
-                    
-                    # Para autenticación fallida con API token, probar con session token
-                    if [[ "$method" != "user.login" && "$method" != "apiinfo.version" && -n "$ZABBIX_API_TOKEN" && "$error_code" =~ ^-?(32602|32700)$ ]]; then
-                        log_debug "API token falló, intentando con session token..."
-                        continue
-                    fi
                     
                     # Solo mostrar error en el último intento
                     if [[ $retry_count -eq $((max_retries - 1)) ]]; then
@@ -1046,20 +1013,15 @@ test_zabbix_connection() {
                        echo "$version_response" | grep -o '"result":"[^"]*"' | cut -d':' -f2 | tr -d '"')
         log_success "Conexión exitosa. Versión del servidor: $version"
         
-        # Probar autenticación
-        if [[ -n "$ZABBIX_API_TOKEN" ]]; then
-            log_info "Probando autenticación con API token..."
-            local test_auth=$(zabbix_api_call "hostgroup.get" '{"output": ["groupid"], "limit": 1}' "true")
-            if [[ $? -eq 0 ]]; then
-                log_success "Autenticación con API token exitosa"
-                return 0
-            else
-                log_warning "Fallo autenticación con API token"
-                return 1
-            fi
-        else
-            log_info "Se requerirá autenticación con usuario/contraseña"
+        # Probar autenticación con API token
+        log_info "Probando autenticación con API token..."
+        local test_auth=$(zabbix_api_call "hostgroup.get" '{"output": ["groupid"], "limit": 1}' "true")
+        if [[ $? -eq 0 ]]; then
+            log_success "Autenticación con API token exitosa"
             return 0
+        else
+            log_error "Fallo autenticación con API token"
+            return 1
         fi
     else
         log_error "No se pudo conectar a la API de Zabbix"
@@ -1068,35 +1030,15 @@ test_zabbix_connection() {
 }
 
 zabbix_authenticate() {
-    # Si ya tenemos API token, no necesitamos autenticar
-    if [[ -n "$ZABBIX_API_TOKEN" ]]; then
-        log_info "Usando API token para autenticación"
-        return 0
-    fi
-    
-    log_info "Autenticando con usuario/contraseña..."
-    
-    local auth_params='{
-        "user": "'$ZABBIX_API_USER'",
-        "password": "'$ZABBIX_API_PASSWORD'"
-    }'
-    
-    local response=$(zabbix_api_call "user.login" "$auth_params" "false")
-    if [[ $? -ne 0 ]]; then
-        log_error "Error en autenticación con Zabbix"
+    # Verificar que tenemos el API token
+    if [[ -z "$ZABBIX_API_TOKEN" ]]; then
+        log_error "No se ha proporcionado el token de API"
         return 1
     fi
     
-    AUTH_TOKEN=$(echo "$response" | jq -r '.result // empty' 2>/dev/null || 
-                echo "$response" | grep -o '"result":"[^"]*"' | cut -d':' -f2 | tr -d '"')
-    
-    if [[ -z "$AUTH_TOKEN" ]]; then
-        log_error "No se pudo obtener token de autenticación"
-        return 1
-    fi
-    
-    log_success "Autenticación exitosa con Zabbix"
-    log_debug "Token de autenticación obtenido"
+    log_info "Usando API token para autenticación"
+    log_success "Token de API configurado correctamente"
+    return 0
 }
 
 check_host_exists() {
@@ -1862,18 +1804,16 @@ Uso:
     ./zabbix.sh [opciones]
     
     # Usando parámetros (RECOMENDADO para seguridad)
-    ./zabbix.sh --server-url <URL> --api-user <USER> --api-password <PASS>
+    ./zabbix.sh --server-url <URL> --api-token <TOKEN>
     
     # Descarga y ejecución en una línea (curl)
     curl -s https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \\
         sudo bash -s -- --server-url "http://zabbix.local" \\
-                        --api-user "admin" \\
-                        --api-password "password"
+                        --api-token "8a29710542180b6eb941de2b55aeeeba..."
 
 Parámetros requeridos:
     -s, --server-url <URL>        URL del servidor Zabbix (ej: http://zabbix.local)
-    -u, --api-user <USER>         Usuario para API de Zabbix
-    -p, --api-password <PASS>     Contraseña para API de Zabbix
+    -t, --api-token <TOKEN>       Token de API de Zabbix para autenticación
 
 Parámetros opcionales:
     -g, --host-group <GROUP>      Grupo de hosts (default: "Linux servers")
@@ -1885,8 +1825,7 @@ Parámetros opcionales:
 
 Variables de entorno alternativas (MENOS SEGURO):
     ZABBIX_SERVER_URL     - URL del servidor Zabbix
-    ZABBIX_API_USER       - Usuario para API de Zabbix
-    ZABBIX_API_PASSWORD   - Contraseña para API de Zabbix
+    ZABBIX_API_TOKEN      - Token de API de Zabbix
     ZABBIX_HOST_GROUP     - Grupo de hosts
     FORCE_REINSTALL       - Forzar reinstalación (true/false)
     UPDATE_EXISTING_HOST  - Actualizar host existente (true/false)
@@ -1904,24 +1843,21 @@ Ejemplos:
 
 1) Instalación local con parámetros:
     sudo ./zabbix.sh --server-url "http://zabbix.empresa.com" \\
-                     --api-user "admin" \\
-                     --api-password "mi-password" \\
+                     --api-token "8a29710542180b6eb941de2b55aeeeba833589d4..." \\
                      --host-group "Servidores Linux"
 
 2) Descarga e instalación directa con curl:
     curl -fsSL https://raw.githubusercontent.com/user/repo/main/zabbix.sh | \\
         sudo bash -s -- \\
             --server-url "https://monitoring.empresa.com" \\
-            --api-user "api-user" \\
-            --api-password "secure-password" \\
+            --api-token "your-api-token-here" \\
             --force-reinstall
 
 3) Instalación con configuración personalizada:
     curl -s https://example.com/zabbix.sh | \\
         sudo bash -s -- \\
             --server-url "http://zabbix.local" \\
-            --api-user "admin" \\
-            --api-password "password" \\
+            --api-token "8a29710542180b6eb941de2b55aeeeba..." \\
             --host-group "Production Servers" \\
             --server-port "10051" \\
             --agent-port "10050" \\
@@ -1931,8 +1867,7 @@ Ejemplos:
     curl -s https://example.com/zabbix.sh | \\
         sudo bash -s -- \\
             --server-url "http://test.local" \\
-            --api-user "test" \\
-            --api-password "test" \\
+            --api-token "test-token-123" \\
             --dry-run
 
 Opciones adicionales:
@@ -2040,12 +1975,8 @@ main() {
                 PARAM_SERVER_URL="$2"
                 shift 2
                 ;;
-            -u|--api-user)
-                PARAM_API_USER="$2"
-                shift 2
-                ;;
-            -p|--api-password)
-                PARAM_API_PASSWORD="$2"
+            -t|--api-token)
+                PARAM_API_TOKEN="$2"
                 shift 2
                 ;;
             -g|--host-group)
