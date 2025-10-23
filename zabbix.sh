@@ -1467,6 +1467,20 @@ validate_zabbix_connectivity() {
 configure_zabbix_agent() {
     log_info "Configurando agente Zabbix..."
     
+    # Establecer archivo de configuración si no está definido
+    if [[ -z "$ZABBIX_CONFIG_FILE" ]]; then
+        if [[ -f "/etc/zabbix/zabbix_agentd.conf" ]]; then
+            ZABBIX_CONFIG_FILE="/etc/zabbix/zabbix_agentd.conf"
+        elif [[ -f "/etc/zabbix/zabbix_agent2.conf" ]]; then
+            ZABBIX_CONFIG_FILE="/etc/zabbix/zabbix_agent2.conf"
+        else
+            log_error "No se encontró archivo de configuración de Zabbix"
+            return 1
+        fi
+    fi
+    
+    log_debug "Usando archivo de configuración: $ZABBIX_CONFIG_FILE"
+    
     if [[ ! -f "$ZABBIX_CONFIG_FILE" ]]; then
         log_error "Archivo de configuración no encontrado: $ZABBIX_CONFIG_FILE"
         return 1
