@@ -2075,6 +2075,7 @@ main() {
 }
 
 # Ejecutar solo si el script es llamado directamente
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+# Protección para cuando BASH_SOURCE no está definido (ej: curl | bash)
+if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]] || [[ -z "${BASH_SOURCE[0]:-}" ]]; then
     main "$@"
 fi
