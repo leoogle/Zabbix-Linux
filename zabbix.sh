@@ -1521,12 +1521,16 @@ configure_zabbix_agent() {
     )
     
     # Aplicar cambios de configuración (continuar incluso si algún sed falla)
+    log_debug "Aplicando cambios de configuración..."
     for change in "${config_changes[@]}"; do
-        sed -i "$change" "$ZABBIX_CONFIG_FILE" || log_debug "Sed falló para: $change (puede ser normal si la línea no existe)"
+        sed -i "$change" "$ZABBIX_CONFIG_FILE" || log_debug "Sed falló para: $change"
     done
+    log_debug "Cambios de configuración aplicados"
     
     # Agregar configuraciones adicionales si no existen
-    local arch=$(uname -m)
+    log_debug "Agregando configuraciones adicionales..."
+    local arch
+    arch=$(uname -m) || arch="x86_64"
     if ! grep -q "^HostMetadata=" "$ZABBIX_CONFIG_FILE" 2>/dev/null; then
         {
             echo ""
@@ -1534,8 +1538,11 @@ configure_zabbix_agent() {
             echo "HostMetadata=Linux $DISTRO $VERSION $arch"
         } >> "$ZABBIX_CONFIG_FILE" || log_debug "No se pudo agregar HostMetadata"
     fi
+    log_debug "HostMetadata configurado"
+    log_debug "HostMetadata configurado"
     
     # Configurar logs
+    log_debug "Configurando archivos de log..."
     if ! grep -q "^LogFile=" "$ZABBIX_CONFIG_FILE" 2>/dev/null; then
         echo "LogFile=/var/log/zabbix/zabbix_agentd.log" >> "$ZABBIX_CONFIG_FILE" || log_debug "No se pudo agregar LogFile"
     fi
@@ -1543,10 +1550,13 @@ configure_zabbix_agent() {
     if ! grep -q "^LogFileSize=" "$ZABBIX_CONFIG_FILE" 2>/dev/null; then
         echo "LogFileSize=10" >> "$ZABBIX_CONFIG_FILE" || log_debug "No se pudo agregar LogFileSize"
     fi
+    log_debug "Configuración de logs completada"
     
     # Crear directorio de logs si no existe
+    log_debug "Creando directorio de logs..."
     mkdir -p /var/log/zabbix || log_debug "No se pudo crear directorio de logs"
     chown zabbix:zabbix /var/log/zabbix 2>/dev/null || log_debug "No se pudo cambiar owner del directorio de logs"
+    log_debug "Directorio de logs configurado"
     
     # Validar configuración (solo advertencia si falla, no bloquear instalación)
     local validation_output
