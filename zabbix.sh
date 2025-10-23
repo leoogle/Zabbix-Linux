@@ -1532,12 +1532,19 @@ configure_zabbix_agent() {
     chown zabbix:zabbix /var/log/zabbix 2>/dev/null || true
     
     # Validar configuración
-    if ! zabbix_agentd -t -c "$ZABBIX_CONFIG_FILE" &>/dev/null; then
+    local validation_output
+    validation_output=$(zabbix_agentd -t -c "$ZABBIX_CONFIG_FILE" 2>&1)
+    local validation_result=$?
+    
+    if [[ $validation_result -ne 0 ]]; then
         log_error "Configuración de Zabbix inválida"
+        log_debug "Salida de validación: $validation_output"
         log_info "Restaurando configuración original..."
         cp "$BACKUP_DIR/zabbix_agentd.conf.original" "$ZABBIX_CONFIG_FILE"
         return 1
     fi
+    
+    log_debug "Validación de configuración exitosa: $validation_output"
     
     log_success "Agente Zabbix configurado correctamente"
     return 0
