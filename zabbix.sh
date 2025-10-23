@@ -56,7 +56,7 @@ PARAM_SERVER_PORT=""
 PARAM_AGENT_PORT=""
 
 # Variables internas
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd 2>/dev/null || pwd)"
 LOG_FILE="/tmp/zabbix_install_$(date +%Y%m%d_%H%M%S).log"
 BACKUP_DIR="/tmp/zabbix_backup_$(date +%Y%m%d_%H%M%S)"
 HOST_IP=""
@@ -860,41 +860,38 @@ check_existing_installation() {
         return 1  # Necesita instalación
     fi
     
-    log_success "Agente Zabbix ya está instalado y configurado correctamente"
-    return 0  # No necesita instalación
-        log_warning "Zabbix agent ya está instalado en el sistema"
+    # Verificar si se debe forzar reinstalación
+    if [[ "${FORCE_REINSTALL:-false}" == "true" ]]; then
+        log_info "FORCE_REINSTALL=true, procediendo con reinstalación completa..."
         
-        if [[ "${FORCE_REINSTALL:-false}" != "true" ]]; then
-            log_info "Para forzar reinstalación, use: export FORCE_REINSTALL=true"
-            log_info "Procediendo con reconfiguración del agente existente..."
-            
-            # Solo hacer backup y reconfigurar
-            if [[ -f "$ZABBIX_CONFIG_FILE" ]]; then
-                cp "$ZABBIX_CONFIG_FILE" "$BACKUP_DIR/zabbix_agentd.conf.backup"
-            fi
-            
-            return 0
-        else
-            log_info "FORCE_REINSTALL=true, procediendo con reinstalación completa..."
-            
-            # Detener servicio si está corriendo
-            if [[ "$zabbix_running" == true ]]; then
-                systemctl stop zabbix-agent || true
-            fi
-            
-            # Remover instalación existente
-            case "$DISTRO" in
-                "ubuntu"|"debian")
-                    apt-get remove --purge -y zabbix-agent* || true
-                    ;;
-                "centos"|"rhel"|"rocky"|"almalinux")
-                    yum remove -y zabbix-agent* || true
-                    ;;
-            esac
+        # Detener servicio si está corriendo
+        if [[ "$service_running" == true ]]; then
+            systemctl stop "$active_service" 2>/dev/null || true
         fi
+        
+        # Remover instalación existente
+        case "$DISTRO" in
+            "ubuntu"|"debian")
+                apt-get remove --purge -y zabbix-agent* || true
+                ;;
+            "centos"|"rhel"|"rocky"|"almalinux")
+                yum remove -y zabbix-agent* || true
+                ;;
+        esac
+        
+        return 1  # Necesita instalación
+    else
+        log_info "Agente Zabbix ya instalado. Use FORCE_REINSTALL=true para reinstalar"
+        log_info "Procediendo con reconfiguración del agente existente..."
+        
+        # Hacer backup de configuración
+        if [[ -f "$ZABBIX_CONFIG_FILE" ]]; then
+            cp "$ZABBIX_CONFIG_FILE" "$BACKUP_DIR/zabbix_agentd.conf.backup"
+        fi
+        
+        log_success "Verificación de instalación existente completada"
+        return 0  # No necesita instalación
     fi
-    
-    log_success "Verificación de instalación existente completada"
 }
 
 #################################################################################
