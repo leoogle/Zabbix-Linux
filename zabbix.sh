@@ -1526,24 +1526,27 @@ configure_zabbix_agent() {
     done
     
     # Agregar configuraciones adicionales si no existen
-    if ! grep -q "^HostMetadata=" "$ZABBIX_CONFIG_FILE"; then
-        echo "" >> "$ZABBIX_CONFIG_FILE"
-        echo "# Auto-configured by Zabbix installer" >> "$ZABBIX_CONFIG_FILE"
-        echo "HostMetadata=Linux $DISTRO $VERSION $(uname -m)" >> "$ZABBIX_CONFIG_FILE"
+    local arch=$(uname -m)
+    if ! grep -q "^HostMetadata=" "$ZABBIX_CONFIG_FILE" 2>/dev/null; then
+        {
+            echo ""
+            echo "# Auto-configured by Zabbix installer"
+            echo "HostMetadata=Linux $DISTRO $VERSION $arch"
+        } >> "$ZABBIX_CONFIG_FILE" || log_debug "No se pudo agregar HostMetadata"
     fi
     
     # Configurar logs
-    if ! grep -q "^LogFile=" "$ZABBIX_CONFIG_FILE"; then
-        echo "LogFile=/var/log/zabbix/zabbix_agentd.log" >> "$ZABBIX_CONFIG_FILE"
+    if ! grep -q "^LogFile=" "$ZABBIX_CONFIG_FILE" 2>/dev/null; then
+        echo "LogFile=/var/log/zabbix/zabbix_agentd.log" >> "$ZABBIX_CONFIG_FILE" || log_debug "No se pudo agregar LogFile"
     fi
     
-    if ! grep -q "^LogFileSize=" "$ZABBIX_CONFIG_FILE"; then
-        echo "LogFileSize=10" >> "$ZABBIX_CONFIG_FILE"
+    if ! grep -q "^LogFileSize=" "$ZABBIX_CONFIG_FILE" 2>/dev/null; then
+        echo "LogFileSize=10" >> "$ZABBIX_CONFIG_FILE" || log_debug "No se pudo agregar LogFileSize"
     fi
     
     # Crear directorio de logs si no existe
-    mkdir -p /var/log/zabbix
-    chown zabbix:zabbix /var/log/zabbix 2>/dev/null || true
+    mkdir -p /var/log/zabbix || log_debug "No se pudo crear directorio de logs"
+    chown zabbix:zabbix /var/log/zabbix 2>/dev/null || log_debug "No se pudo cambiar owner del directorio de logs"
     
     # Validar configuración (solo advertencia si falla, no bloquear instalación)
     local validation_output
