@@ -2075,11 +2075,16 @@ main() {
     fi
     
     # Verificar instalación existente
-    check_existing_installation
+    local needs_installation=false
+    if ! check_existing_installation; then
+        needs_installation=true
+    fi
     
-    # Instalar Zabbix
-    install_zabbix_repository
-    install_zabbix_agent
+    # Instalar Zabbix solo si es necesario
+    if [[ "$needs_installation" == true ]]; then
+        install_zabbix_repository
+        install_zabbix_agent
+    fi
     
     # Configurar agente
     configure_zabbix_agent
