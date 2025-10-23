@@ -1520,9 +1520,9 @@ configure_zabbix_agent() {
         "s/^LogRemoteCommands=.*/LogRemoteCommands=0/"
     )
     
-    # Aplicar cambios de configuración
+    # Aplicar cambios de configuración (continuar incluso si algún sed falla)
     for change in "${config_changes[@]}"; do
-        sed -i "$change" "$ZABBIX_CONFIG_FILE"
+        sed -i "$change" "$ZABBIX_CONFIG_FILE" || log_debug "Sed falló para: $change (puede ser normal si la línea no existe)"
     done
     
     # Agregar configuraciones adicionales si no existen
