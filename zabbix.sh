@@ -1417,7 +1417,23 @@ validate_zabbix_connectivity() {
         log_success "API de Zabbix disponible, versión: $api_version"
     else
         log_error "Respuesta inválida de la API de Zabbix"
-        return 1
+        log_debug "Respuesta recibida: $api_test"
+        log_info "Intentando probar con URL alternativa: $ZABBIX_SERVER_URL/zabbix/api_jsonrpc.php"
+        
+        # Intentar con ruta alternativa
+        local api_test_alt=$(curl -s --connect-timeout 10 --max-time 30 \
+            -H "Content-Type: application/json-rpc" \
+            -d '{"jsonrpc":"2.0","method":"apiinfo.version","id":1}' \
+            "$ZABBIX_SERVER_URL/zabbix/api_jsonrpc.php")
+        
+        local api_version_alt=$(echo "$api_test_alt" | grep -o '"result":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+        if [[ -n "$api_version_alt" ]]; then
+            log_success "API de Zabbix disponible en ruta alternativa, versión: $api_version_alt"
+        else
+            log_debug "Respuesta alternativa recibida: $api_test_alt"
+            log_error "No se pudo validar la API de Zabbix en ninguna ruta"
+            return 1
+        fi
     fi
     
     # Test de conectividad del servidor Zabbix (puerto del servidor)
